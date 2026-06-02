@@ -1,6 +1,6 @@
 # routing-oracle
 
-Multi-model routing validator for [nexus-agents](https://github.com/williamzujkowski/nexus-agents). Chains `delegate_to_model`, `weather_report`, and `consensus_vote` to validate routing decisions.
+Multi-model routing validator for [nexus-agents](https://github.com/nexus-substrate/nexus-agents). Chains `delegate_to_model`, `weather_report`, and `consensus_vote` to validate routing decisions.
 
 ## Quick start
 
