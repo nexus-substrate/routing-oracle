@@ -6,7 +6,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/williamzujkowski/routing-oracle.git"
+    "url": "https://github.com/nexus-substrate/routing-oracle.git"
   },
   "keywords": ["routing", "model-selection", "mcp", "nexus-agents", "e2e-test"],
   "engines": { "node": ">=22" },
