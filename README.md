@@ -19,12 +19,6 @@ pnpm build       # Compile to dist/
 | `weather_report` | Get multi-CLI performance metrics |
 | `consensus_vote` | Multi-model consensus voting |
 
-## Live integration mode
-
-```bash
-NEXUS_LIVE=true ORACLE_TASK="Build a REST API" npx tsx src/run-live.ts
-```
-
 ## License
 
 MIT
