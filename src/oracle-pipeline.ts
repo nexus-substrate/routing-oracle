@@ -29,6 +29,52 @@ export interface ToolCaller {
   call(toolName: string, args: Record<string, unknown>): Promise<unknown>;
 }
 
+/** Default per-call timeout for remote tool calls (ms). */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** Error thrown when a tool call exceeds its configured timeout. */
+export class ToolCallTimeoutError extends Error {
+  constructor(toolName: string, timeoutMs: number) {
+    super(`Tool call '${toolName}' timed out after ${timeoutMs}ms`);
+    this.name = 'ToolCallTimeoutError';
+  }
+}
+
+/**
+ * Wrap a ToolCaller so every call is bounded by `timeoutMs`.
+ *
+ * Uses an AbortController (so cooperating callers can cancel in-flight work)
+ * combined with Promise.race, guaranteeing the returned promise settles even
+ * if the underlying call hangs forever.
+ */
+export function withTimeout(
+  caller: ToolCaller,
+  timeoutMs: number = DEFAULT_TIMEOUT_MS
+): ToolCaller {
+  return {
+    call(toolName: string, args: Record<string, unknown>): Promise<unknown> {
+      const controller = new AbortController();
+      const callArgs = { ...args, signal: controller.signal };
+      return new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          controller.abort();
+          reject(new ToolCallTimeoutError(toolName, timeoutMs));
+        }, timeoutMs);
+        caller.call(toolName, callArgs).then(
+          (value) => {
+            clearTimeout(timer);
+            resolve(value);
+          },
+          (err) => {
+            clearTimeout(timer);
+            reject(err);
+          }
+        );
+      });
+    },
+  };
+}
+
 // ============================================================================
 // Individual steps
 // ============================================================================
@@ -142,19 +188,25 @@ export async function runOraclePipeline(
   caller: ToolCaller,
   config: OracleConfig
 ): Promise<OracleReport> {
+  // Bound every remote tool call by a timeout so a hung server cannot stall.
+  const boundedCaller = withTimeout(caller, config.timeoutMs);
+
   // Step 1: Route all tasks
   const validations: RoutingValidation[] = [];
   for (const exp of config.expectations) {
     try {
-      const v = await routeAndValidate(caller, exp);
+      const v = await routeAndValidate(boundedCaller, exp);
       validations.push(v);
-    } catch {
+    } catch (e) {
+      // Preserve the real failure so a network/schema/auth error is
+      // distinguishable from a benign miss when debugging a live run.
+      const message = e instanceof Error ? e.message : String(e);
       validations.push({
         category: exp.category,
         recommended: 'ERROR',
         expected: exp.expectedPrimaryCli,
         correct: false,
-        reasoning: 'Tool call failed',
+        reasoning: `Tool call failed: ${message}`,
         alternatives: [],
       });
     }
@@ -166,8 +218,10 @@ export async function runOraclePipeline(
   let weather: WeatherResponse | null = null;
   if (config.includeWeather === true) {
     try {
-      weather = await fetchWeather(caller);
-    } catch {
+      weather = await fetchWeather(boundedCaller);
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`fetchWeather failed: ${message}`);
       weather = null;
     }
   }
@@ -177,11 +231,13 @@ export async function runOraclePipeline(
   if (config.includeVote === true) {
     try {
       voteResult = await voteOnQuality(
-        caller,
+        boundedCaller,
         validations,
         config.voteStrategy
       );
-    } catch {
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error(`voteOnQuality failed: ${message}`);
       voteResult = null;
     }
   }

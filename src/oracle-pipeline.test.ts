@@ -12,6 +12,8 @@ import {
   getMisrouted,
   weatherConfirms,
   runOraclePipeline,
+  withTimeout,
+  ToolCallTimeoutError,
 } from './oracle-pipeline.js';
 import type { RoutingValidation, OracleConfig } from './types.js';
 import {
@@ -322,6 +324,95 @@ describe('runOraclePipeline', () => {
     expect(result.validations[0]!.correct).toBe(false);
     expect(result.weather).toBeNull();
     expect(result.voteResult).toBeNull();
+  });
+
+  it('preserves the real error message in the validation reasoning', async () => {
+    const caller: ToolCaller = {
+      call: vi.fn(async () => {
+        throw new Error('ECONNREFUSED 127.0.0.1:7777');
+      }),
+    };
+
+    const result = await runOraclePipeline(caller, {
+      expectations: [DEFAULT_EXPECTATIONS[0]!],
+    });
+
+    // Real cause must survive instead of a generic 'Tool call failed' literal.
+    expect(result.validations[0]!.reasoning).toContain(
+      'ECONNREFUSED 127.0.0.1:7777'
+    );
+  });
+});
+
+// ============================================================================
+// withTimeout
+// ============================================================================
+
+describe('withTimeout', () => {
+  it('rejects with ToolCallTimeoutError when a call hangs', async () => {
+    const hanging: ToolCaller = {
+      // Never resolves.
+      call: () => new Promise<unknown>(() => {}),
+    };
+    const bounded = withTimeout(hanging, 10);
+
+    await expect(bounded.call('delegate_to_model', {})).rejects.toBeInstanceOf(
+      ToolCallTimeoutError
+    );
+  });
+
+  it('passes through a fast result before the timeout fires', async () => {
+    const fast: ToolCaller = {
+      call: async () => ({ ok: true }),
+    };
+    const bounded = withTimeout(fast, 1000);
+
+    await expect(bounded.call('weather_report', {})).resolves.toEqual({
+      ok: true,
+    });
+  });
+
+  it('propagates the underlying error unchanged', async () => {
+    const failing: ToolCaller = {
+      call: async () => {
+        throw new Error('schema mismatch');
+      },
+    };
+    const bounded = withTimeout(failing, 1000);
+
+    await expect(bounded.call('consensus_vote', {})).rejects.toThrow(
+      'schema mismatch'
+    );
+  });
+
+  it('aborts the signal passed to the underlying caller on timeout', async () => {
+    let observed: AbortSignal | undefined;
+    const slow: ToolCaller = {
+      call: (_tool, args) => {
+        observed = args['signal'] as AbortSignal;
+        return new Promise<unknown>(() => {});
+      },
+    };
+    const bounded = withTimeout(slow, 10);
+
+    await expect(bounded.call('delegate_to_model', {})).rejects.toBeInstanceOf(
+      ToolCallTimeoutError
+    );
+    expect(observed?.aborted).toBe(true);
+  });
+
+  it('enforces the timeout end-to-end through runOraclePipeline', async () => {
+    const hanging: ToolCaller = {
+      call: () => new Promise<unknown>(() => {}),
+    };
+
+    const result = await runOraclePipeline(hanging, {
+      expectations: [DEFAULT_EXPECTATIONS[0]!],
+      timeoutMs: 10,
+    });
+
+    expect(result.validations[0]!.recommended).toBe('ERROR');
+    expect(result.validations[0]!.reasoning).toContain('timed out');
   });
 
   it('computes accuracy across multiple categories', async () => {

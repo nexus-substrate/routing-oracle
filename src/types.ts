@@ -212,4 +212,6 @@ export interface OracleConfig {
   readonly includeWeather?: boolean;
   readonly includeVote?: boolean;
   readonly voteStrategy?: VotingStrategy;
+  /** Per-call timeout (ms) for remote tool calls. Omit to use the default. */
+  readonly timeoutMs?: number;
 }
